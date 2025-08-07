@@ -2,7 +2,7 @@
 
 A recreation of the iconic "digital rain" effect from The Matrix movies. Falling streams of green Japanese katakana characters and numerals cascade down the screen.
 
-Published as a GitHub Pages site.
+**Live Demo:** https://tomweston.github.io/matrix/
 
 ## Features
 
