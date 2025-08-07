@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Matrix Digital Rain</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            height: 100%;
+            background: #000;
+            overflow: hidden;
+            cursor: none;
+        }
+
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+
+<body> <canvas id="rain"></canvas>
+    <script> (() => {
+            const canvas = document.getElementById('rain'); const ctx = canvas.getContext('2d');
+            // Device pixel ratio for crisp glyphs
+            let dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+
+            // Character set (bias toward Katakana, include numerals)
+            const glyphs = ('アイウエオカキクケコサシスセソタチツテトナニヌネノ' +
+                'ハヒフヘホマミムメモヤユヨラリルレロワヲンヴッャュョ' +
+                '0123456789').split('');
+
+            // Visual tuning
+            let fontSize = 12; // Base font size (CSS px)
+            let colSpacing = 0.95; // tight column packing
+            let headColor = '#eaffff';// slightly blue-white head
+            let nearGreen = '#39ff90';// vivid neon green
+            let darkGreen = '#0b3d24';// far tail dark
+            let bgFade = 0.065; // alpha used for trail fade (slightly longer trail)
+            let minLen = 18, maxLen = 45; // stream length range
+            let minSpeed = 60, maxSpeed = 140; // px/sec per stream
+            let reSpawnProb = 0.012; // chance per frame for inactive column to spawn
+            let gapProb = 0.05; // occasional holes in the tail
+            let jitterX = 0.6; // sub-pixel x jitter per column
+
+            // State
+            let width = 0, height = 0, cols = 0, colW = 0;
+            let streams = []; // one per column
+
+            // Utilities
+            const rand = (a, b) => a + Math.random() * (b - a) | 0;
+            const pick = arr => arr[(Math.random() * arr.length) | 0];
+
+            function resize() {
+                dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+                canvas.style.width = window.innerWidth + 'px';
+                canvas.style.height = window.innerHeight + 'px';
+                canvas.width = Math.floor(window.innerWidth * dpr);
+                canvas.height = Math.floor(window.innerHeight * dpr);
+
+
+                width = canvas.width;
+                height = canvas.height;
+
+                // Scale font to device pixels
+                const px = Math.floor(fontSize * dpr);
+                ctx.font = `${px}px monospace`;
+                ctx.textBaseline = 'top';
+
+                // Measure column width from actual glyph metrics for tight packing
+                const metrics = ctx.measureText('あ'); // full-width reference glyph
+                colW = Math.max(1, Math.floor(metrics.width * colSpacing));
+                cols = Math.floor(width / colW);
+
+                // Rebuild streams sized to columns
+                const old = streams;
+                streams = new Array(cols);
+                for (let i = 0; i < cols; i++) {
+                    streams[i] = old[i] ? old[i] : makeStream(i);
+                    streams[i].x = Math.floor(i * colW + (Math.random() * jitterX - jitterX / 2));
+                    streams[i].active = Math.random() < 0.8; // denser initial activation
+                    if (streams[i].active) {
+                        streams[i].y = -rand(0, Math.floor(height * 0.8));
+                        streams[i].headRow = Math.floor(streams[i].y / px);
+                    } else {
+                        streams[i].y = -1e6; // far off-screen
+                    }
+                }
+                // Clear instantly
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, width, height);
+            }
+
+            function makeStream(i) {
+                const px = Math.floor(fontSize * dpr);
+                return {
+                    x: Math.floor(i * colW),
+                    y: -rand(0, height),
+                    speed: rand(minSpeed, maxSpeed) * dpr / 60, // px per frame (60fps base)
+                    len: rand(minLen, maxLen),
+                    headRow: 0,
+                    active: true,
+                    buffer: new Map() // recycled glyphs per row
+                };
+            }
+
+            // Color ramp depending on distance from head
+            function setColor(dist) {
+                if (dist === 0) { ctx.fillStyle = headColor; return; }
+                if (dist <= 6) { ctx.fillStyle = nearGreen; return; }
+                // Exponential-ish fade via linear RGB interpolation
+                const t = Math.min(1, (dist - 6) / 24);
+                const ng = [0x39, 0xff, 0x90];
+                const dg = [0x0b, 0x3d, 0x24];
+                const r = Math.round(ng[0] + (dg[0] - ng[0]) * t);
+                const g = Math.round(ng[1] + (dg[1] - ng[1]) * t);
+                const b = Math.round(ng[2] + (dg[2] - ng[2]) * t);
+                ctx.fillStyle = `rgb(${r},${g},${b})`;
+            }
+
+            let lastTime = 0;
+            let animId = 0;
+
+            function step(ts) {
+                animId = requestAnimationFrame(step);
+                if (!lastTime) lastTime = ts;
+                const dt = Math.min(100, ts - lastTime);
+                lastTime = ts;
+
+
+                // Fade the previous frame to create trails
+                ctx.fillStyle = `rgba(0,0,0,${bgFade})`;
+                ctx.fillRect(0, 0, width, height);
+
+                const px = Math.floor(fontSize * dpr);
+
+                for (let i = 0; i < cols; i++) {
+                    const s = streams[i];
+
+                    if (!s.active) {
+                        // Occasionally respawn a new stream
+                        if (Math.random() < reSpawnProb) {
+                            const ns = makeStream(i);
+                            ns.x = Math.floor(i * colW + (Math.random() * jitterX - jitterX / 2)); // keep jitter
+                            streams[i] = ns;
+                        }
+                        continue;
+                    }
+
+                    // Advance head
+                    s.y += s.speed * (dt / (1000 / 60));
+                    s.headRow = Math.floor(s.y / px);
+
+                    // Draw the visible portion of the stream (head and tail)
+                    const startRow = s.headRow - s.len;
+                    for (let row = startRow; row <= s.headRow; row++) {
+                        const y = row * px;
+                        if (y < -px || y > height) continue;
+
+                        const dist = s.headRow - row;
+
+                        // Random gaps to avoid uniformity
+                        if (dist !== 0 && Math.random() < gapProb) continue;
+
+                        // Fetch/refresh glyph for this row
+                        let ch = s.buffer.get(row);
+                        if (!ch || dist <= 2 || Math.random() < 0.02) {
+                            ch = pick(glyphs);
+                            s.buffer.set(row, ch);
+                        }
+
+                        setColor(dist);
+                        ctx.fillText(ch, s.x, y);
+                    }
+
+                    // Deactivate when head passes beyond bottom plus margin
+                    if (s.y > height + s.len * px) {
+                        s.active = false;
+                        s.buffer.clear();
+                    }
+                }
+            }
+
+            // Visibility handling (pause to save CPU)
+            function onVis() {
+                if (document.hidden) {
+                    cancelAnimationFrame(animId);
+                    animId = 0;
+                    lastTime = 0;
+                } else if (!animId) {
+                    lastTime = 0;
+                    animId = requestAnimationFrame(step);
+                }
+            }
+
+            window.addEventListener('resize', resize);
+            document.addEventListener('visibilitychange', onVis);
+
+            resize();
+            animId = requestAnimationFrame(step);
+        })();
+    </script>
+
+</body>
+
+</html>
